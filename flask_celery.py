@@ -21,14 +21,18 @@ from werkzeug import cached_property
 
 from flask.ext import script
 
+from celery import registry
+
 
 class FlaskLoader(_default.Loader):
 
     def read_configuration(self):
-        config = self.app.flask_app.config
-        settings = self.setup_settings(config)
-        self.configured = True
-        return settings
+        if self.app.flask_app:
+            config = self.app.flask_app.config
+            settings = self.setup_settings(config)
+            self.configured = True
+            return settings
+        return {}
 
 
 class FlaskAppPickler(AppPickler):
@@ -48,9 +52,49 @@ class Celery(App):
         self.flask_app = flask_app
         super(Celery, self).__init__(*args, **kwargs)
 
+    def init_app(self, flask_app):
+        self.flask_app = flask_app
+
+        # reconfigure
+        self.config_from_object(self.flask_app.config)
+
+        # Update cached properties
+        self.backend = self._get_backend()
+        self.conf = self._get_config()
+        self.Task = self.create_task_cls()
+
+        # Since we may already have tasks in the registry,
+        # we'll need to update their configuration as well
+        conf = self.conf
+
+        vals = [('backend', self.backend),
+            ('exchange_type', conf.CELERY_DEFAULT_EXCHANGE_TYPE),
+            ('delivery_mode', conf.CELERY_DEFAULT_DELIVERY_MODE),
+            ('send_error_emails', conf.CELERY_SEND_TASK_ERROR_EMAILS),
+            ('error_whitelist', conf.CELERY_TASK_ERROR_WHITELIST),
+            ('serializer', conf.CELERY_TASK_SERIALIZER),
+            ('rate_limit', conf.CELERY_DEFAULT_RATE_LIMIT),
+            ('track_started', conf.CELERY_TRACK_STARTED),
+            ('acks_late', conf.CELERY_ACKS_LATE),
+            ('ignore_result', conf.CELERY_IGNORE_RESULT),
+            ('store_errors_even_if_ignored',
+                conf.CELERY_STORE_ERRORS_EVEN_IF_IGNORED)
+        ]
+
+        for task in registry.tasks.values():
+            for key, value in vals:
+                setattr(task, key, value)
+
+        self.loader.configured = True
+
+    def AsyncResult(self, task_id, backend=None, task_name=None):
+        # Need to explictly pass self.backend here or else DisabledBackend
+        # will be used by the tasks
+        return super(Celery, self).AsyncResult(task_id, backend=self.backend,
+            task_name=task_name)
+
     def __reduce_args__(self):
         return (self.flask_app, ) + super(Celery, self).__reduce_args__()
-
 
 
 def to_Option(option, typemap={"int": int, "float": float, "string": str}):
