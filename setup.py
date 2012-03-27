@@ -22,7 +22,7 @@ setup(
     test_suite="nose.collector",
     install_requires=[
         'Flask>=0.8',
-        'Flask-Script-fix',
+        'Flask-Script',
         'celery>=2.3.0',
     ],
     classifiers=[
